@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "workspace-explorer",
   "name": "Workspace Explorer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "모든 워크스페이스와 원하는 경로를 Finder처럼 탐색하고, 파일을 Orca 탭으로 열어 읽고 수정·삭제합니다.",
   "engines": {
     "orca": ">=1.4.259"

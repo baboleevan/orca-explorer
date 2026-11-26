@@ -34,6 +34,7 @@ function fakeWorker(calls: Calls, overrides: Record<string, (input: any) => unkn
     'fs.create': ({ dir, name }) => ({ path: `${dir}/${name}` }),
     'fs.rename': ({ path, newName }) => ({ path: `${path.slice(0, path.lastIndexOf('/'))}/${newName}` }),
     'fs.delete': ({ path }) => ({ trashedTo: `/Users/me/.Trash/${path.split('/').pop()}` }),
+    'roots.remove': ({ id }) => ({ roots: ROOTS.filter((r) => r.id !== id) }),
     'roots.add': ({ path }) => ({
       roots: [...ROOTS, { id: `p:${path}`, kind: 'custom', label: path, group: '내 경로', path }],
       added: `p:${path}`
@@ -114,13 +115,28 @@ test('워크스페이스 트리에서 폴더를 더블클릭하면 그 폴더 �
   assert.deepEqual(last(calls, 'fs.list'), { rootId: `loc:${WS}/src`, path: `${WS}/src` })
 })
 
-test('위치를 즐겨찾기에 추가', async () => {
+test('별 버튼으로 즐겨찾기 넣고 빼기, 드롭다운으로 이동', async () => {
   const calls: Calls = []
   const v = await open(calls, {}, { location: DL })
   assert.deepEqual(last(calls, 'fs.list'), { rootId: `loc:${DL}`, path: DL })
+  assert.equal(v.find({ label: '즐겨찾기' }), null, '즐겨찾기가 없으면 드롭다운도 없다')
+
   await v.press({ label: '즐겨찾기에 추가' })
   assert.deepEqual(last(calls, 'roots.add'), { path: DL })
-  assert.ok(v.find({ label: '즐겨찾기에 추가' })?.disabled, '이미 추가된 위치는 비활성')
+  assert.equal(v.valueOf({ label: '즐겨찾기' }), DL, '현재 위치가 즐겨찾기면 드롭다운에 표시')
+
+  // 다른 곳으로 갔다가 드롭다운으로 돌아온다.
+  await v.press({ label: '모든 워크스페이스' })
+  assert.equal(v.valueOf({ label: '즐겨찾기' }), '')
+  await v.select({ label: '즐겨찾기' }, DL)
+  assert.equal(v.valueOf({ label: '위치' }), DL)
+
+  // 다시 누르면 뺀다.
+  await v.press({ label: '즐겨찾기에서 빼기' })
+  assert.deepEqual(last(calls, 'roots.remove'), { id: `p:${DL}` })
+  assert.equal(v.find({ label: '즐겨찾기' }), null)
+  assert.deepEqual(v.errors, [])
+  assert.deepEqual(v.warnings, [])
 })
 
 test('위치에서 아무것도 안 고르고 새 파일 → 이름 변경 → 휴지통', async () => {

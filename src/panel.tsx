@@ -29,7 +29,6 @@ import './protocol'
 import {
   activateKey,
   baseName,
-  bookmarkLocation,
   cancelMode,
   clearQuery,
   createEntry,
@@ -49,6 +48,7 @@ import {
   setScope,
   setShowIgnored,
   startMode,
+  toggleBookmark,
   submitQuery,
   toggle,
   typeQuery
@@ -91,10 +91,11 @@ export function setup(ctx: PanelContext): void {
   )
 }
 
-/** 위치 바: 상위 폴더 · 모든 워크스페이스 · 즐겨찾기 · 경로 입력. */
+/** 위치 바: 상위 폴더 · 모든 워크스페이스 · 즐겨찾기 토글 · 경로 입력, 그 아래 즐겨찾기 드롭다운. */
 function LocationBar() {
   const loc = read(location)
-  const bookmarked = loc !== null && (read(roots) ?? []).some((r) => r.kind === 'custom' && r.path === loc)
+  const bookmarks = (read(roots) ?? []).filter((r) => r.kind === 'custom')
+  const bookmarked = loc !== null && bookmarks.some((r) => r.path === loc)
   return (
     <Stack gap="xs">
       <Row gap="xs" align="center">
@@ -102,12 +103,13 @@ function LocationBar() {
         <IconButton icon="layers" label="모든 워크스페이스" tooltip="모든 워크스페이스 보기" variant="ghost" size="sm" disabled={loc === null} onPress={() => setLocation(null)} />
         <IconButton
           icon="star"
-          label="즐겨찾기에 추가"
-          tooltip={bookmarked ? '이미 즐겨찾기에 있습니다' : '이 위치를 즐겨찾기(내 경로)에 추가'}
-          variant="ghost"
+          label={bookmarked ? '즐겨찾기에서 빼기' : '즐겨찾기에 추가'}
+          tooltip={loc === null ? '폴더로 이동한 뒤 즐겨찾기할 수 있습니다' : bookmarked ? '즐겨찾기에서 빼기' : '이 위치를 즐겨찾기에 추가'}
+          variant={bookmarked ? 'solid' : 'ghost'}
+          tone={bookmarked ? 'accent' : undefined}
           size="sm"
-          disabled={loc === null || bookmarked}
-          onPress={bookmarkLocation}
+          disabled={loc === null}
+          onPress={toggleBookmark}
         />
         <Box grow>
           <Input
@@ -120,6 +122,16 @@ function LocationBar() {
           />
         </Box>
       </Row>
+      {bookmarks.length > 0 ? (
+        <Select
+          label="즐겨찾기"
+          labelHidden
+          placeholder={`즐겨찾기로 이동… (${bookmarks.length}개)`}
+          value={bookmarked && loc ? loc : ''}
+          options={bookmarks.map((r) => ({ value: r.path, label: r.path }))}
+          onChange={(path) => void setLocation(path)}
+        />
+      ) : null}
     </Stack>
   )
 }

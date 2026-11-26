@@ -65,14 +65,21 @@ export async function loadRoots(): Promise<void> {
   }
 }
 
-/** 현재 위치를 "내 경로" 즐겨찾기에 추가. */
-export async function bookmarkLocation(): Promise<void> {
+/** 별 버튼: 현재 위치를 즐겨찾기에 넣거나, 이미 있으면 뺀다. */
+export async function toggleBookmark(): Promise<void> {
   const path = read(location)
   if (!path) return
+  const existing = (read(roots) ?? []).find((r) => r.kind === 'custom' && r.path === path)
   try {
-    const answer = await plugin.request('roots.add', { path })
-    set(roots, answer.roots)
-    notify('success', `즐겨찾기에 추가했습니다: ${path}`)
+    if (existing) {
+      const answer = await plugin.request('roots.remove', { id: existing.id })
+      set(roots, answer.roots)
+      notify('neutral', `즐겨찾기에서 뺐습니다: ${path}`)
+    } else {
+      const answer = await plugin.request('roots.add', { path })
+      set(roots, answer.roots)
+      notify('success', `즐겨찾기에 추가했습니다: ${path}`)
+    }
   } catch (error) {
     notify('danger', errorText(error))
   }
