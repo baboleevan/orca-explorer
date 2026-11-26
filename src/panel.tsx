@@ -4,7 +4,6 @@ import {
   Button,
   Callout,
   Card,
-  CodeView,
   EmptyState,
   IconButton,
   Input,
@@ -29,24 +28,24 @@ import {
 import './protocol'
 import {
   activateKey,
-  addRoot,
   baseName,
+  bookmarkLocation,
   cancelMode,
   clearQuery,
   createEntry,
+  createTarget,
   deleteSelected,
+  goUp,
   invalidate,
-  loadPreview,
   loadRoots,
-  openFile,
-  parentOf,
+  navigate,
   refreshAll,
   reloadExpanded,
   removeRoot,
   renameSelected,
-  reveal,
   select,
   selectKey,
+  setLocation,
   setScope,
   setShowIgnored,
   startMode,
@@ -60,10 +59,12 @@ import {
   dirs,
   draft,
   expanded,
+  locId,
+  location,
+  locationDraft,
   message,
   mode,
   nodeKey,
-  preview,
   query,
   roots,
   rootsError,
@@ -72,9 +73,10 @@ import {
   selection,
   showIgnored
 } from './panel/state'
-import { buildTree, expandedKeys } from './panel/tree'
+import { buildLocationTree, buildTree, expandedKeys } from './panel/tree'
 
 export function setup(ctx: PanelContext): void {
+  set(locationDraft, read(location) ?? '')
   void settings.get('showIgnored').then((v) => set(showIgnored, v === true))
   void loadRoots().then(reloadExpanded)
   ctx.subscriptions.push(
@@ -85,41 +87,65 @@ export function setup(ctx: PanelContext): void {
     settings.onDidChange(({ key }) => {
       if (key === 'showIgnored') void settings.get('showIgnored').then((v) => set(showIgnored, v === true))
       if (key === 'showIgnored' || key === 'maxEntriesPerDir') void reloadExpanded()
-      if (key === 'previewMaxKB') {
-        const sel = read(selection)
-        if (sel && !sel.dir) void loadPreview(sel.rootId, sel.path)
-      }
     })
   )
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+/** 위치 바: 상위 폴더 · 모든 워크스페이스 · 즐겨찾기 · 경로 입력. */
+function LocationBar() {
+  const loc = read(location)
+  const bookmarked = loc !== null && (read(roots) ?? []).some((r) => r.kind === 'custom' && r.path === loc)
+  return (
+    <Stack gap="xs">
+      <Row gap="xs" align="center">
+        <IconButton icon="collapse" label="상위 폴더" tooltip="상위 폴더" variant="ghost" size="sm" disabled={loc === null || loc === '/'} onPress={goUp} />
+        <IconButton icon="layers" label="모든 워크스페이스" tooltip="모든 워크스페이스 보기" variant="ghost" size="sm" disabled={loc === null} onPress={() => setLocation(null)} />
+        <IconButton
+          icon="star"
+          label="즐겨찾기에 추가"
+          tooltip={bookmarked ? '이미 즐겨찾기에 있습니다' : '이 위치를 즐겨찾기(내 경로)에 추가'}
+          variant="ghost"
+          size="sm"
+          disabled={loc === null || bookmarked}
+          onPress={bookmarkLocation}
+        />
+        <Box grow>
+          <Input
+            label="위치"
+            labelHidden
+            placeholder="경로로 이동 (예: ~/Downloads) · 비우면 모든 워크스페이스"
+            value={read(locationDraft)}
+            onChange={(v) => set(locationDraft, v)}
+            onSubmit={navigate}
+          />
+        </Box>
+      </Row>
+    </Stack>
+  )
 }
 
 function Actions() {
   const sel = read(selection)
   const root = sel ? (read(roots) ?? []).find((r) => r.id === sel.rootId) : undefined
-  const fileOps = sel !== null
+  const canCreate = createTarget() !== null
   const itemOps = sel !== null && !sel.isRoot
   return (
-    <Toolbar label="탐색기 도구" gap="xs">
+    <Toolbar label="파일 도구" gap="xs">
       <IconButton icon="refresh" label="새로고침" tooltip="새로고침" variant="ghost" size="sm" onPress={refreshAll} />
-      <IconButton icon="add" label="경로 추가" tooltip="폴더 경로 추가" variant="ghost" size="sm" onPress={() => startMode({ kind: 'addRoot' })} />
-      <IconButton icon="file" label="새 파일" tooltip="새 파일" variant="ghost" size="sm" disabled={!fileOps} onPress={() => startMode({ kind: 'create', type: 'file' })} />
-      <IconButton icon="folder" label="새 폴더" tooltip="새 폴더" variant="ghost" size="sm" disabled={!fileOps} onPress={() => startMode({ kind: 'create', type: 'dir' })} />
+      <IconButton icon="file" label="새 파일" tooltip="새 파일" variant="ghost" size="sm" disabled={!canCreate} onPress={() => startMode({ kind: 'create', type: 'file' })} />
+      <IconButton icon="folder" label="새 폴더" tooltip="새 폴더" variant="ghost" size="sm" disabled={!canCreate} onPress={() => startMode({ kind: 'create', type: 'dir' })} />
       <IconButton icon="edit" label="이름 변경" tooltip="이름 변경" variant="ghost" size="sm" disabled={!itemOps} onPress={() => startMode({ kind: 'rename' })} />
       <IconButton icon="delete" label="삭제" tooltip="휴지통으로 이동" variant="ghost" size="sm" tone={itemOps ? 'danger' : undefined} disabled={!itemOps} onPress={() => startMode({ kind: 'delete' })} />
+      <IconButton icon="next" label="이 폴더로 이동" tooltip="선택한 폴더로 이동 (더블클릭과 같음)" variant="ghost" size="sm" disabled={!sel?.dir} onPress={() => sel && setLocation(sel.path)} />
       {sel?.isRoot && root?.kind === 'custom' ? (
-        <IconButton icon="remove" label="경로 빼기" tooltip="목록에서 이 경로 빼기 (파일은 그대로)" variant="ghost" size="sm" onPress={() => removeRoot(root.id)} />
+        <IconButton icon="remove" label="즐겨찾기에서 빼기" tooltip="즐겨찾기에서 빼기 (파일은 그대로)" variant="ghost" size="sm" onPress={() => removeRoot(root.id)} />
       ) : null}
     </Toolbar>
   )
 }
 
 function SearchBar() {
+  const loc = read(location)
   const scopeOptions = [
     { value: 'all', label: '모든 루트' },
     ...(read(roots) ?? []).filter((r) => !r.disabled).map((r) => ({ value: r.id, label: `${r.group} / ${r.label}` }))
@@ -131,7 +157,7 @@ function SearchBar() {
         label="파일 검색"
         labelHidden
         type="search"
-        placeholder="파일 이름 검색 (경로는 / 포함)"
+        placeholder={loc ? '이 위치에서 파일 이름 검색' : '파일 이름 검색 (경로는 / 포함)'}
         value={read(query)}
         onChange={typeQuery}
         onSubmit={submitQuery}
@@ -139,13 +165,17 @@ function SearchBar() {
       {read(query) ? (
         <Row gap="xs" align="center">
           <Box grow>
-            <Select
-              label="검색 범위"
-              labelHidden
-              value={scopeOptions.some((o) => o.value === scope) ? scope : 'all'}
-              options={scopeOptions}
-              onChange={setScope}
-            />
+            {loc ? (
+              <Text muted size="xs" truncate>범위: {loc}</Text>
+            ) : (
+              <Select
+                label="검색 범위"
+                labelHidden
+                value={scopeOptions.some((o) => o.value === scope) ? scope : 'all'}
+                options={scopeOptions}
+                onChange={setScope}
+              />
+            )}
           </Box>
           <IconButton icon="close" label="검색 지우기" variant="ghost" size="sm" onPress={clearQuery} />
         </Row>
@@ -173,19 +203,19 @@ function ModeForm() {
       </Callout>
     )
   }
+  const target = createTarget()
   const spec =
-    m.kind === 'addRoot'
-      ? { label: '폴더 경로', placeholder: '~/Downloads', submit: '추가', run: (v: string) => addRoot(v) }
-      : m.kind === 'rename'
-        ? { label: '새 이름', placeholder: '', submit: '바꾸기', run: (v: string) => renameSelected(v) }
-        : {
-            label: m.type === 'dir' ? '새 폴더 이름' : '새 파일 이름',
-            placeholder: m.type === 'dir' ? 'folder' : 'file.ts',
-            submit: '만들기',
-            run: (v: string) => createEntry(v, m.type)
-          }
+    m.kind === 'rename'
+      ? { label: '새 이름', placeholder: '', submit: '바꾸기', where: sel?.path, run: (v: string) => renameSelected(v) }
+      : {
+          label: m.type === 'dir' ? '새 폴더 이름' : '새 파일 이름',
+          placeholder: m.type === 'dir' ? 'folder' : 'file.ts',
+          submit: '만들기',
+          where: target ? `위치: ${target.dir}` : undefined,
+          run: (v: string) => createEntry(v, m.type)
+        }
   return (
-    <Card title={spec.label} description={m.kind === 'addRoot' ? '워크스페이스 밖의 폴더도 볼 수 있습니다.' : sel ? (m.kind === 'rename' ? sel.path : `위치: ${sel.dir ? sel.path : parentOf(sel.path)}`) : undefined}>
+    <Card title={spec.label} description={spec.where}>
       <Stack gap="xs">
         <Input
           label={spec.label}
@@ -236,7 +266,9 @@ function SearchResults() {
               description={[labels.get(hit.rootId), relDir].filter(Boolean).join(' · ')}
               icon={hit.dir ? 'folder' : 'file'}
               current={sel?.rootId === hit.rootId && sel.path === hit.path}
-              onPress={() => select({ rootId: hit.rootId, path: hit.path, dir: hit.dir, isRoot: false })}
+              onPress={() =>
+                hit.dir ? setLocation(hit.path) : select({ rootId: hit.rootId, path: hit.path, dir: false, isRoot: false })
+              }
             />
           )
         })}
@@ -246,7 +278,29 @@ function SearchResults() {
   )
 }
 
-function TreeView() {
+/** 위치 모드: 그 폴더의 내용만. */
+function LocationView({ path }: { path: string }) {
+  const state = read(dirs)[nodeKey(locId(path), path)]
+  if (state?.status === 'error') return <Callout tone="danger" title="폴더를 읽지 못했습니다">{state.message}</Callout>
+  const items = buildLocationTree(path, read(dirs))
+  if (items === null) return <Skeleton lines={6} label="불러오는 중" />
+  if (items.length === 0) return <EmptyState title="빈 폴더" description={path} icon="folder" />
+  const sel = read(selection)
+  return (
+    <Tree
+      label="파일 트리"
+      maxHeight="lg"
+      items={items}
+      expanded={read(expanded)}
+      selected={sel ? nodeKey(sel.rootId, sel.path) : undefined}
+      onToggle={({ key, expanded: open }) => toggle(key, open)}
+      onSelect={({ key }) => selectKey(key)}
+      onAction={({ key }) => activateKey(key)}
+    />
+  )
+}
+
+function WorkspacesView() {
   const all = read(roots)
   const error = read(rootsError)
   if (error) {
@@ -261,7 +315,7 @@ function TreeView() {
   }
   if (all === null) return <Skeleton lines={6} label="불러오는 중" />
   if (all.length === 0) {
-    return <EmptyState title="표시할 루트가 없습니다" description="+ 버튼으로 폴더 경로를 추가하세요." icon="folder" />
+    return <EmptyState title="표시할 워크스페이스가 없습니다" description="위치 입력창에 경로를 넣어 이동하세요." icon="folder" />
   }
   const sel = read(selection)
   return (
@@ -278,54 +332,20 @@ function TreeView() {
   )
 }
 
-function Details() {
-  const sel = read(selection)
-  if (!sel) return null
-  const p = read(preview)
-  const searching = read(query).trim() !== ''
-  const root = (read(roots) ?? []).find((r) => r.id === sel.rootId)
-  return (
-    <Card title={baseName(sel.path) || sel.path} description={sel.path}>
-      <Stack gap="sm">
-        <Row gap="xs" wrap>
-          {!sel.dir ? (
-            <Button size="sm" icon="open-external" onPress={() => openFile(sel)} tooltip={root?.kind === 'custom' ? '워크스페이스 안의 파일만 탭으로 열립니다' : undefined}>
-              Orca에서 열기
-            </Button>
-          ) : null}
-          {searching ? <Button size="sm" variant="outline" icon="next" onPress={() => reveal(sel)}>트리에서 보기</Button> : null}
-        </Row>
-        {sel.dir ? null : p.status === 'loading' ? (
-          <Skeleton lines={8} label="미리보기 불러오는 중" />
-        ) : p.status === 'error' ? (
-          <Text tone="danger" size="sm">{p.message}</Text>
-        ) : p.status === 'ready' && p.preview.kind === 'text' ? (
-          <Stack gap="xs">
-            <CodeView code={p.preview.text ?? ''} language={p.preview.language} label="미리보기" lineNumbers maxHeight="lg" />
-            <Text muted size="xs">
-              {formatSize(p.preview.size)}{p.preview.truncated ? ' · 앞부분만 표시합니다' : ''}
-            </Text>
-          </Stack>
-        ) : p.status === 'ready' && p.preview.kind === 'binary' ? (
-          <Text muted size="sm">바이너리 파일이라 미리볼 수 없습니다 ({formatSize(p.preview.size)}).</Text>
-        ) : p.status === 'ready' ? (
-          <Text muted size="sm">파일이 커서({formatSize(p.preview.size)}) 미리보기를 건너뜁니다. 설정에서 한도를 바꿀 수 있습니다.</Text>
-        ) : null}
-      </Stack>
-    </Card>
-  )
-}
-
 export default function Panel() {
+  const loc = read(location)
   return (
     <Stack gap="sm">
+      <LocationBar />
       <Actions />
       <SearchBar />
       <Message />
       <ModeForm />
-      {read(query).trim() ? <SearchResults /> : <TreeView />}
-      <Switch label="무시된 파일 표시" checked={read(showIgnored)} onChange={setShowIgnored} />
-      <Details />
+      {read(query).trim() ? <SearchResults /> : loc ? <LocationView path={loc} /> : <WorkspacesView />}
+      <Row justify="between" align="center">
+        <Text muted size="xs">클릭: 탭으로 열기 · 더블클릭: 폴더로 이동</Text>
+        <Switch label="무시된 파일 표시" checked={read(showIgnored)} onChange={setShowIgnored} />
+      </Row>
     </Stack>
   )
 }

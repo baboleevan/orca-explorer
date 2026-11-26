@@ -1,5 +1,5 @@
 // 패널 <-> worker 계약. src/panel.tsx 와 src/worker.ts 가 함께 읽는다.
-import type { ExplorerEntry, ExplorerHit, ExplorerPreview, ExplorerRoot } from './types'
+import type { ExplorerEntry, ExplorerHit, ExplorerRoot } from './types'
 
 declare module 'orca' {
   interface PluginRequests {
@@ -16,8 +16,10 @@ declare module 'orca' {
       input: { query: string; rootId?: string }
       output: { hits: ExplorerHit[]; truncated: boolean }
     }
-    'fs.preview': { input: { rootId: string; path: string }; output: ExplorerPreview }
-    'fs.open': { input: { rootId: string; path: string }; output: { opened: boolean } }
+    /** 위치 입력창 경로(~ 허용)를 실제 폴더 절대경로로. */
+    'fs.resolveDir': { input: { path: string }; output: { path: string } }
+    /** Orca 메인 창에 탭으로 연다. 워크스페이스 밖이면 폴더를 프로젝트로 등록하고 `registered` 에 알린다. */
+    'fs.open': { input: { rootId: string; path: string }; output: { opened: boolean; registered?: string } }
     'fs.create': {
       input: { rootId: string; dir: string; name: string; kind: 'file' | 'dir' }
       output: { path: string }

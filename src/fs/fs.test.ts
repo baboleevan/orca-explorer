@@ -7,7 +7,7 @@ import { afterEach, assert, beforeEach, test } from 'orca/testing'
 import { listDir } from './list'
 import { createEntry, renameEntry, trashEntry } from './ops'
 import { ExplorerError, expandPath, resolveChild, resolveExisting, validateName } from './paths'
-import { clipText, PREVIEW_TEXT_BYTES, previewFile } from './preview'
+import { projectDirFor, tooBroad } from './roots'
 import { listAll, matchEntries } from './search'
 
 let base = ''
@@ -108,23 +108,14 @@ test('ops: 생성 → 충돌 → 이름 변경 → 휴지통', async () => {
   assert.deepEqual((await readdir(trash)).sort(), ['dup 2.txt', 'dup.txt'])
 })
 
-test('preview: 텍스트·바이너리·큰 파일', async () => {
-  const text = await previewFile(join(root, 'src/app.ts'), 1024)
-  assert.equal(text.kind, 'text')
-  assert.equal(text.language, 'typescript')
-  assert.equal(text.text, 'export const a = 1\n')
-
-  await writeFile(join(root, 'bin.dat'), Buffer.from([1, 0, 2]))
-  assert.equal((await previewFile(join(root, 'bin.dat'), 1024)).kind, 'binary')
-  assert.equal((await previewFile(join(root, 'README.md'), 2)).kind, 'tooLarge')
-})
-
-test('clipText: 한도를 넘으면 줄 경계에서 자른다', () => {
-  const long = Array.from({ length: 2000 }, (_, i) => `줄 ${i}`).join('\n')
-  const { text, truncated } = clipText(long)
-  assert.ok(truncated)
-  assert.ok(Buffer.byteLength(text) <= PREVIEW_TEXT_BYTES)
-  assert.ok(long.startsWith(text + '\n'))
+test('projectDirFor: 너무 넓은 폴더는 파일이 든 폴더로, 그래도 넓으면 거부', () => {
+  const home = '/Users/me'
+  assert.ok(tooBroad('/', home) && tooBroad('/Users', home) && tooBroad(home, home))
+  assert.ok(!tooBroad('/Users/me/Downloads', home))
+  assert.equal(projectDirFor('/Users/me/Downloads', '/Users/me/Downloads/a/b.txt', home), '/Users/me/Downloads')
+  assert.equal(projectDirFor('/', '/etc/hosts', home), '/etc')
+  assert.equal(projectDirFor(home, '/Users/me/notes/a.md', home), '/Users/me/notes')
+  assert.throws(() => projectDirFor(home, '/Users/me/.zshrc', home))
 })
 
 test('search: git ls-files 와 BFS 모두 이름으로 찾는다', async () => {

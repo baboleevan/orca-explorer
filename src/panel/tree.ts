@@ -1,7 +1,7 @@
 // 상태 → Tree 항목. 순수 함수라 단독으로 테스트할 수 있다.
 import type { TreeItem } from 'orca'
 import { CUSTOM_GROUP, type ExplorerRoot } from '../types'
-import { type DirState, groupKey, moreKey, nodeKey } from './state'
+import { type DirState, groupKey, locId, moreKey, nodeKey } from './state'
 
 function childrenOf(rootId: string, path: string, dirs: Record<string, DirState>): Partial<TreeItem> {
   const key = nodeKey(rootId, path)
@@ -62,4 +62,10 @@ export function buildTree(
 export function expandedKeys(roots: ExplorerRoot[], expanded: string[], collapsedGroups: string[]): string[] {
   const groups = [...new Set(roots.map((r) => r.group))].filter((g) => !collapsedGroups.includes(g)).map(groupKey)
   return [...groups, ...expanded]
+}
+
+/** 위치 모드: 그 폴더의 내용만 최상위로. 아직 못 읽었으면 null. */
+export function buildLocationTree(path: string, dirs: Record<string, DirState>): TreeItem[] | null {
+  const items = childrenOf(locId(path), path, dirs)
+  return items.children ? [...items.children] : null
 }

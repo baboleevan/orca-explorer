@@ -1,21 +1,44 @@
-// Workspace Explorer worker: 패널의 요청을 받아 로컬 파일시스템을 읽고 쓴다.
+// Workspace Explorer worker: 패널의 요청을 받아 로컬 파일시스템을 읽고 쓰고, 파일을 Orca 탭으로 연다.
 // 저장 시 재시작되므로 오래 남겨야 할 상태(사용자 경로)는 orca.storage 에 둔다.
-import { stat } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import { dirname, join, posix, relative, sep } from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import './protocol'
 import type { ExplorerHit, ExplorerRoot } from './types'
 import { listDir } from './fs/list'
 import { createEntry, renameEntry, trashEntry } from './fs/ops'
-import { ExplorerError, expandPath, resolveChild, resolveExisting } from './fs/paths'
-import { previewFile } from './fs/preview'
-import { buildRoots, containingWorkspace, CUSTOM_ROOTS_KEY } from './fs/roots'
+import { runOrcaCli } from './fs/orcaCli'
+import { ExplorerError, expandPath, isInside, resolveChild, resolveExisting } from './fs/paths'
+import {
+  buildRoots,
+  containingWorkspace,
+  CUSTOM_ROOTS_KEY,
+  LOCATION_PREFIX,
+  locationRoot,
+  projectDirFor
+} from './fs/roots'
 import { listAll, matchEntries } from './fs/search'
 
 const MAX_HITS = 200
 const ROOTS_TTL_MS = 5000
 
-type Settings = { showIgnored: boolean; maxEntriesPerDir: number; previewMaxKB: number }
+type Settings = { showIgnored: boolean; maxEntriesPerDir: number }
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+async function real(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch {
+    return path
+  }
+}
 
 export default function activate(orca: OrcaWorkerApi): void {
   let cache: { at: number; roots: ExplorerRoot[] } | null = null
@@ -37,6 +60,12 @@ export default function activate(orca: OrcaWorkerApi): void {
   }
 
   async function root(rootId: string): Promise<ExplorerRoot> {
+    // Finder 식 "위치": 어떤 폴더든 임시 루트가 된다.
+    if (rootId.startsWith(LOCATION_PREFIX)) {
+      const path = rootId.slice(LOCATION_PREFIX.length)
+      if (!(await isDirectory(path))) throw new ExplorerError('invalid_params', `폴더가 아니거나 없습니다: ${path}`)
+      return locationRoot(path)
+    }
     let found = (await loadRoots()).find((r) => r.id === rootId)
     if (!found) found = (await loadRoots(true)).find((r) => r.id === rootId)
     if (!found) throw new ExplorerError('invalid_params', '루트를 찾을 수 없습니다. 새로고침하세요.')
@@ -48,8 +77,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const all = await orca.settings.get()
     return {
       showIgnored: all.showIgnored === true,
-      maxEntriesPerDir: typeof all.maxEntriesPerDir === 'number' ? all.maxEntriesPerDir : 500,
-      previewMaxKB: typeof all.previewMaxKB === 'number' ? all.previewMaxKB : 256
+      maxEntriesPerDir: typeof all.maxEntriesPerDir === 'number' ? all.maxEntriesPerDir : 500
     }
   }
 
@@ -64,15 +92,26 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   }
 
+  /** `dir` 을 Orca 폴더 프로젝트로 등록하고 그 워크스페이스를 돌려준다. */
+  async function registerFolder(dir: string): Promise<ExplorerRoot> {
+    const cli = await runOrcaCli(['repo', 'add', '--path', dir, '--kind', 'folder'])
+    const want = await real(dir)
+    // 등록이 목록에 반영되기까지 잠깐 걸릴 수 있어 몇 번 다시 읽는다.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      for (const r of await loadRoots(true)) {
+        if (r.kind === 'workspace' && !r.disabled && (r.path === dir || (await real(r.path)) === want)) return r
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+    orca.log(`repo add failed for ${dir}: ${cli.output.slice(0, 500)}`)
+    throw new ExplorerError('action_failed', `폴더를 Orca 프로젝트로 등록하지 못했습니다: ${dir}`)
+  }
+
   orca.panels.handle('roots.list', async () => ({ roots: await loadRoots(true) }))
 
   orca.panels.handle('roots.add', async ({ path }) => {
     const abs = expandPath(path)
-    try {
-      if (!(await stat(abs)).isDirectory()) throw new Error()
-    } catch {
-      throw new ExplorerError('invalid_params', `폴더가 아니거나 없습니다: ${abs}`)
-    }
+    if (!(await isDirectory(abs))) throw new ExplorerError('invalid_params', `폴더가 아니거나 없습니다: ${abs}`)
     const current = await customPaths()
     if (!current.includes(abs)) await orca.storage.set(CUSTOM_ROOTS_KEY, [...current, abs])
     return { roots: await loadRoots(true), added: `p:${abs}` }
@@ -83,6 +122,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     const path = id.slice(2)
     await orca.storage.set(CUSTOM_ROOTS_KEY, (await customPaths()).filter((p) => p !== path))
     return { roots: await loadRoots(true) }
+  })
+
+  /** 위치 입력창의 경로(~ 허용)를 실제 폴더 경로로 바꾼다. */
+  orca.panels.handle('fs.resolveDir', async ({ path }) => {
+    const abs = expandPath(path)
+    if (!(await isDirectory(abs))) throw new ExplorerError('invalid_params', `폴더가 아니거나 없습니다: ${abs}`)
+    return { path: abs }
   })
 
   orca.panels.handle('fs.list', async ({ rootId, path }) => {
@@ -114,26 +160,31 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { hits, truncated }
   })
 
-  orca.panels.handle('fs.preview', async ({ rootId, path }) => {
-    const r = await root(rootId)
-    const file = await resolveExisting(r.path, path)
-    return previewFile(file, (await settings()).previewMaxKB * 1024)
-  })
-
   orca.panels.handle('fs.open', async ({ rootId, path }) => {
     const r = await root(rootId)
     const file = await resolveExisting(r.path, path)
-    const ws = r.kind === 'workspace' ? r : containingWorkspace(await loadRoots(), file)
-    if (!ws?.workspaceId) {
-      throw new ExplorerError(
-        'not_permitted',
-        '워크스페이스 밖의 파일은 Orca 탭으로 열 수 없습니다. 미리보기로 확인하세요.'
-      )
+    if (await isDirectory(file)) throw new ExplorerError('invalid_params', '폴더는 탭으로 열 수 없습니다.')
+
+    let ws = r.kind === 'workspace' ? r : containingWorkspace(await loadRoots(), file)
+    let registered: string | undefined
+    if (!ws) {
+      registered = projectDirFor(r.path, file)
+      ws = await registerFolder(registered)
+    }
+    if (!ws.workspaceId) throw new ExplorerError('action_failed', '워크스페이스를 찾지 못했습니다.')
+
+    // Orca 의 탭은 워크스페이스마다 따로 있다: 다른 워크스페이스면 먼저 그쪽으로 화면을 옮긴다.
+    const context = await orca.host.call('workspace.readContext', {}).catch(() => null)
+    if (context?.workspaceId !== ws.workspaceId) {
+      await orca.host.call('workspace.open', { workspaceId: ws.workspaceId })
     }
     // editor.open 은 워크스페이스 기준 상대경로(posix 구분자)를 받는다.
-    const rel = relative(ws.path, file).split(sep).join(posix.sep)
+    const inside = isInside(ws.path, file)
+    const rel = relative(inside ? ws.path : await real(ws.path), inside ? file : await real(file))
+      .split(sep)
+      .join(posix.sep)
     await orca.host.call('editor.open', { workspaceId: ws.workspaceId, path: rel })
-    return { opened: true }
+    return { opened: true, ...(registered ? { registered } : {}) }
   })
 
   orca.panels.handle('fs.create', async ({ rootId, dir, name, kind }) => {

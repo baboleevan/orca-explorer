@@ -21,14 +21,5 @@ export type ExplorerEntry = { name: string; path: string; dir: boolean }
 
 export type ExplorerHit = { rootId: string; path: string; rel: string; dir: boolean }
 
-export type ExplorerPreview = {
-  kind: 'text' | 'binary' | 'tooLarge'
-  path: string
-  size: number
-  text?: string
-  /** 텍스트가 미리보기 한도에서 잘렸는지. */
-  truncated?: boolean
-  language?: string
-}
 
 export const CUSTOM_GROUP = '내 경로'

@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "workspace-explorer",
   "name": "Workspace Explorer",
-  "version": "0.1.0",
-  "description": "모든 워크스페이스와 직접 추가한 경로를 한 트리에서 탐색하고, 검색·미리보기·파일 조작을 합니다.",
+  "version": "0.2.0",
+  "description": "모든 워크스페이스와 원하는 경로를 Finder처럼 탐색하고, 파일을 Orca 탭으로 열어 읽고 수정·삭제합니다.",
   "engines": {
     "orca": ">=1.4.259"
   },
@@ -36,22 +36,21 @@
         "default": 500,
         "minimum": 50,
         "maximum": 2000
-      },
-      {
-        "key": "previewMaxKB",
-        "title": "미리보기 최대 크기(KB)",
-        "description": "이보다 큰 파일은 미리보기를 하지 않습니다.",
-        "type": "integer",
-        "default": 256,
-        "minimum": 16,
-        "maximum": 2048
       }
     ]
   },
   "capabilities": [
-    { "kind": "storage:own" },
-    { "kind": "settings:own" },
-    { "kind": "workspace:read" },
-    { "kind": "workspace:write" }
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    }
   ]
 }

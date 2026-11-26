@@ -25,6 +25,10 @@ export default defineCheck({
     storage: { 'roots.custom': [`${repo}/src/fs`] },
     persisted: { plugin: { expanded: [rootKey(repo), rootKey(`${repo}/src`)] } }
   },
+  location: {
+    results: workspaces,
+    persisted: { plugin: { location: `${repo}/src` } }
+  },
   listError: {
     results: { 'workspace.list': hostError('unavailable', 'Orca 런타임에 연결할 수 없습니다') }
   }

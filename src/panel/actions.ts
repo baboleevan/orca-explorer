@@ -6,12 +6,14 @@ import {
   dirs,
   draft,
   expanded,
-  groupKey,
+  isLocId,
+  locId,
+  location,
+  locationDraft,
   message,
   mode,
   nodeKey,
   parseNodeKey,
-  preview,
   query,
   roots,
   rootsError,
@@ -38,10 +40,17 @@ export function baseName(path: string): string {
   return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
 }
 
-const isUnder = (path: string, dir: string) => path === dir || path.startsWith(dir + '/') || path.startsWith(dir + '\\')
+const isUnder = (path: string, dir: string) =>
+  path === dir || path.startsWith(dir.endsWith('/') ? dir : dir + '/') || path.startsWith(dir + '\\')
 
 function notify(tone: 'success' | 'danger' | 'neutral', text: string): void {
   set(message, { tone, text })
+}
+
+/** 루트 id 의 경로: 위치면 그 경로, 아니면 루트 목록에서. */
+function rootPathOf(rootId: string): string | undefined {
+  if (isLocId(rootId)) return rootId.slice(4)
+  return (read(roots) ?? []).find((r) => r.id === rootId)?.path
 }
 
 // ---------------------------------------------------------------- 루트
@@ -56,18 +65,14 @@ export async function loadRoots(): Promise<void> {
   }
 }
 
-export async function addRoot(path: string): Promise<void> {
+/** 현재 위치를 "내 경로" 즐겨찾기에 추가. */
+export async function bookmarkLocation(): Promise<void> {
+  const path = read(location)
+  if (!path) return
   try {
     const answer = await plugin.request('roots.add', { path })
     set(roots, answer.roots)
-    set(mode, { kind: 'idle' })
-    const added = answer.roots.find((r) => r.id === answer.added)
-    if (added) {
-      update(collapsedGroups, (g) => g.filter((x) => x !== added.group))
-      await toggle(nodeKey(added.id, added.path), true)
-      set(selection, { rootId: added.id, path: added.path, dir: true, isRoot: true })
-    }
-    notify('success', `경로를 추가했습니다: ${added?.path ?? path}`)
+    notify('success', `즐겨찾기에 추가했습니다: ${path}`)
   } catch (error) {
     notify('danger', errorText(error))
   }
@@ -79,8 +84,7 @@ export async function removeRoot(rootId: string): Promise<void> {
     set(roots, answer.roots)
     update(expanded, (keys) => keys.filter((k) => parseNodeKey(k)?.rootId !== rootId))
     set(selection, null)
-    set(preview, { status: 'none' })
-    notify('neutral', '목록에서 경로를 뺐습니다. 파일은 그대로입니다.')
+    notify('neutral', '즐겨찾기에서 뺐습니다. 파일은 그대로입니다.')
   } catch (error) {
     notify('danger', errorText(error))
   }
@@ -102,10 +106,13 @@ export async function loadDir(rootId: string, path: string): Promise<void> {
   }
 }
 
-/** 저장된 펼침 상태를 다시 읽는다(패널을 연 직후, 설정 변경 후). */
+/** 저장된 펼침 상태와 현재 위치를 다시 읽는다(패널을 연 직후, 설정 변경 후). */
 export async function reloadExpanded(): Promise<void> {
+  const loc = read(location)
   const known = new Set((read(roots) ?? []).filter((r) => !r.disabled).map((r) => r.id))
+  if (loc) known.add(locId(loc))
   const keys = read(expanded).filter((k) => known.has(parseNodeKey(k)?.rootId ?? ''))
+  if (loc) keys.push(nodeKey(locId(loc), loc))
   set(dirs, Object.fromEntries(Object.entries(read(dirs)).filter(([k]) => keys.includes(k))))
   await Promise.all(keys.map((k) => parseNodeKey(k)).map((n) => (n ? loadDir(n.rootId, n.path) : undefined)))
 }
@@ -120,6 +127,8 @@ export async function refreshAll(): Promise<void> {
 /** worker 가 알린 폴더들을 다시 읽는다. 펼치지 않은 폴더는 캐시만 버린다. */
 export async function invalidate(paths: string[]): Promise<void> {
   const open = new Set(read(expanded))
+  const loc = read(location)
+  if (loc) open.add(nodeKey(locId(loc), loc))
   const reload: { rootId: string; path: string }[] = []
   const drop: string[] = []
   for (const key of Object.keys(read(dirs))) {
@@ -132,6 +141,44 @@ export async function invalidate(paths: string[]): Promise<void> {
   await Promise.all(reload.map((n) => loadDir(n.rootId, n.path)))
   const s = read(search)
   if (s.status === 'ready') await runSearch(s.query)
+}
+
+// ---------------------------------------------------------------- Finder 식 위치
+
+/** 위치를 바꾼다. null 이면 모든 워크스페이스 트리로 돌아간다. */
+export async function setLocation(path: string | null): Promise<void> {
+  set(location, path)
+  set(locationDraft, path ?? '')
+  set(selection, null)
+  set(mode, { kind: 'idle' })
+  await clearQuery()
+  // 다른 위치에서 펼쳐 두었던 키는 버린다.
+  const keep = path ? locId(path) : ''
+  update(expanded, (keys) =>
+    keys.filter((k) => {
+      const n = parseNodeKey(k)
+      return !n || !isLocId(n.rootId) || n.rootId === keep
+    })
+  )
+  if (path) await loadDir(locId(path), path)
+}
+
+/** 위치 입력창의 경로(~ 허용)로 이동. 비우면 모든 워크스페이스로. */
+export async function navigate(input: string): Promise<void> {
+  if (!input.trim()) return setLocation(null)
+  try {
+    const answer = await plugin.request('fs.resolveDir', { path: input })
+    await setLocation(answer.path)
+  } catch (error) {
+    notify('danger', errorText(error))
+  }
+}
+
+export async function goUp(): Promise<void> {
+  const loc = read(location)
+  if (!loc) return
+  const parent = parentOf(loc)
+  if (parent !== loc) await setLocation(parent)
 }
 
 // ---------------------------------------------------------------- 트리 상호작용
@@ -152,18 +199,17 @@ export async function toggle(key: string, open: boolean): Promise<void> {
 export function selectionOf(key: string): Selection | null {
   const node = parseNodeKey(key)
   if (!node) return null
-  const root = (read(roots) ?? []).find((r) => r.id === node.rootId && r.path === node.path)
-  if (root) return { ...node, dir: true, isRoot: true }
+  if (rootPathOf(node.rootId) === node.path) return { ...node, dir: true, isRoot: true }
   const parent = read(dirs)[nodeKey(node.rootId, parentOf(node.path))]
   const entry = parent?.status === 'ready' ? parent.entries.find((e) => e.path === node.path) : undefined
   return entry ? { ...node, dir: entry.dir, isRoot: false } : null
 }
 
+/** 클릭: 파일이면 Orca 탭으로 연다. 폴더는 선택만(새 파일 위치·이름 변경 대상). */
 export async function select(next: Selection | null): Promise<void> {
   set(selection, next)
   set(mode, { kind: 'idle' })
-  if (next && !next.dir) await loadPreview(next.rootId, next.path)
-  else set(preview, { status: 'none' })
+  if (next && !next.dir) await openFile(next)
 }
 
 export async function selectKey(key: string): Promise<void> {
@@ -172,33 +218,26 @@ export async function selectKey(key: string): Promise<void> {
   if (next) await select(next)
 }
 
+/** 더블클릭·Enter: 폴더면 그 폴더로 이동(Finder 처럼), 파일이면 연다. */
 export async function activateKey(key: string): Promise<void> {
   if (key.startsWith('\u0001')) {
     const group = key.slice(1)
-    await toggle(groupKey(group), read(collapsedGroups).includes(group))
+    await toggle(key, read(collapsedGroups).includes(group))
     return
   }
   const sel = selectionOf(key)
   if (!sel) return
-  if (sel.dir) await toggle(key, !read(expanded).includes(key))
+  if (sel.dir) await setLocation(sel.path)
   else await openFile(sel)
-}
-
-let previewSeq = 0
-export async function loadPreview(rootId: string, path: string): Promise<void> {
-  const seq = ++previewSeq
-  set(preview, { status: 'loading', path })
-  try {
-    const answer = await plugin.request('fs.preview', { rootId, path })
-    if (seq === previewSeq) set(preview, { status: 'ready', preview: answer })
-  } catch (error) {
-    if (seq === previewSeq) set(preview, { status: 'error', path, message: errorText(error) })
-  }
 }
 
 export async function openFile(sel: Selection): Promise<void> {
   try {
-    await plugin.request('fs.open', { rootId: sel.rootId, path: sel.path })
+    const answer = await plugin.request('fs.open', { rootId: sel.rootId, path: sel.path }, { timeoutMs: 60000 })
+    if (answer.registered) {
+      notify('neutral', `${answer.registered} 폴더를 Orca 프로젝트로 등록해 탭으로 열었습니다.`)
+      void loadRoots()
+    }
   } catch (error) {
     notify('danger', errorText(error))
   }
@@ -217,7 +256,8 @@ export async function runSearch(text: string): Promise<void> {
     return
   }
   set(search, { status: 'loading', query: q })
-  const scope = read(searchScope)
+  const loc = read(location)
+  const scope = loc ? locId(loc) : read(searchScope)
   try {
     const answer = await plugin.request(
       'fs.search',
@@ -264,21 +304,26 @@ export async function setScope(scope: string): Promise<void> {
 
 // ---------------------------------------------------------------- 파일 조작
 
-/** 새 항목을 만들 폴더: 폴더를 골랐으면 그 폴더, 파일이면 부모. */
-export function targetDir(sel: Selection): string {
-  return sel.dir ? sel.path : parentOf(sel.path)
+/** 새 항목을 만들 곳: 고른 폴더, 고른 파일의 부모, 아무것도 안 골랐으면 현재 위치. */
+export function createTarget(): { rootId: string; dir: string } | null {
+  const sel = read(selection)
+  if (sel) return { rootId: sel.rootId, dir: sel.dir ? sel.path : parentOf(sel.path) }
+  const loc = read(location)
+  return loc ? { rootId: locId(loc), dir: loc } : null
 }
 
 export async function createEntry(name: string, kind: 'file' | 'dir'): Promise<void> {
-  const sel = read(selection)
-  if (!sel) return notify('neutral', '먼저 폴더나 파일을 선택하세요.')
-  const dir = targetDir(sel)
+  const target = createTarget()
+  if (!target) return notify('neutral', '먼저 폴더를 선택하세요.')
   try {
-    const answer = await plugin.request('fs.create', { rootId: sel.rootId, dir, name, kind })
+    const answer = await plugin.request('fs.create', { rootId: target.rootId, dir: target.dir, name, kind })
     set(mode, { kind: 'idle' })
-    await toggle(nodeKey(sel.rootId, dir), true)
-    await loadDir(sel.rootId, dir)
-    await select({ rootId: sel.rootId, path: answer.path, dir: kind === 'dir', isRoot: false })
+    // 위치 폴더 자체는 늘 펼쳐져 있다. 그 밖의 폴더는 펼쳐서 새 항목이 보이게 한다.
+    if (!(isLocId(target.rootId) && rootPathOf(target.rootId) === target.dir)) {
+      await toggle(nodeKey(target.rootId, target.dir), true)
+    }
+    await loadDir(target.rootId, target.dir)
+    await select({ rootId: target.rootId, path: answer.path, dir: kind === 'dir', isRoot: false })
     notify('success', `${kind === 'dir' ? '폴더를' : '파일을'} 만들었습니다: ${baseName(answer.path)}`)
   } catch (error) {
     notify('danger', errorText(error))
@@ -301,7 +346,7 @@ export async function renameSelected(newName: string): Promise<void> {
     )
     set(mode, { kind: 'idle' })
     await loadDir(sel.rootId, parentOf(sel.path))
-    await select({ ...sel, path: answer.path })
+    set(selection, { ...sel, path: answer.path })
     notify('success', `이름을 바꿨습니다: ${baseName(answer.path)}`)
   } catch (error) {
     notify('danger', errorText(error))
@@ -313,13 +358,14 @@ export async function deleteSelected(): Promise<void> {
   if (!sel || sel.isRoot) return
   try {
     await plugin.request('fs.delete', { rootId: sel.rootId, path: sel.path })
-    update(expanded, (keys) => keys.filter((k) => {
-      const n = parseNodeKey(k)
-      return !(n && n.rootId === sel.rootId && isUnder(n.path, sel.path))
-    }))
+    update(expanded, (keys) =>
+      keys.filter((k) => {
+        const n = parseNodeKey(k)
+        return !(n && n.rootId === sel.rootId && isUnder(n.path, sel.path))
+      })
+    )
     set(mode, { kind: 'idle' })
     set(selection, null)
-    set(preview, { status: 'none' })
     await loadDir(sel.rootId, parentOf(sel.path))
     notify('success', `휴지통으로 옮겼습니다: ${baseName(sel.path)}`)
   } catch (error) {
@@ -347,19 +393,4 @@ export function startMode(next: Mode): void {
 export function cancelMode(): void {
   set(mode, { kind: 'idle' })
   set(draft, '')
-}
-
-/** 검색 결과 항목을 트리에서 보이도록 조상 폴더를 차례로 펼치고 검색을 닫는다. */
-export async function reveal(sel: Selection): Promise<void> {
-  const root = (read(roots) ?? []).find((r) => r.id === sel.rootId)
-  if (!root) return
-  update(collapsedGroups, (g) => g.filter((x) => x !== root.group))
-  const chain: string[] = []
-  for (let p = parentOf(sel.path); isUnder(p, root.path); p = parentOf(p)) {
-    chain.unshift(p)
-    if (p === root.path || parentOf(p) === p) break
-  }
-  for (const dir of chain) await toggle(nodeKey(root.id, dir), true)
-  await clearQuery()
-  set(selection, sel)
 }
