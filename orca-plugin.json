@@ -1,0 +1,57 @@
+{
+  "manifestVersion": 2,
+  "id": "workspace-explorer",
+  "name": "Workspace Explorer",
+  "version": "0.1.0",
+  "description": "모든 워크스페이스와 직접 추가한 경로를 한 트리에서 탐색하고, 검색·미리보기·파일 조작을 합니다.",
+  "engines": {
+    "orca": ">=1.4.259"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "explorer",
+        "title": "Workspace Explorer",
+        "icon": "folder",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "settings": [
+      {
+        "key": "showIgnored",
+        "title": "무시된 파일 표시",
+        "description": ".gitignore 대상과 node_modules 같은 기본 무시 항목을 트리에 표시합니다.",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "maxEntriesPerDir",
+        "title": "폴더당 최대 항목 수",
+        "description": "한 폴더에서 이 개수를 넘는 항목은 잘라서 보여줍니다.",
+        "type": "integer",
+        "default": 500,
+        "minimum": 50,
+        "maximum": 2000
+      },
+      {
+        "key": "previewMaxKB",
+        "title": "미리보기 최대 크기(KB)",
+        "description": "이보다 큰 파일은 미리보기를 하지 않습니다.",
+        "type": "integer",
+        "default": 256,
+        "minimum": 16,
+        "maximum": 2048
+      }
+    ]
+  },
+  "capabilities": [
+    { "kind": "storage:own" },
+    { "kind": "settings:own" },
+    { "kind": "workspace:read" },
+    { "kind": "workspace:write" }
+  ]
+}
