@@ -289,7 +289,7 @@ function LocationView({ path }: { path: string }) {
   return (
     <Tree
       label="파일 트리"
-      maxHeight="lg"
+      maxHeight="none"
       items={items}
       expanded={read(expanded)}
       selected={sel ? nodeKey(sel.rootId, sel.path) : undefined}
@@ -321,7 +321,7 @@ function WorkspacesView() {
   return (
     <Tree
       label="파일 트리"
-      maxHeight="lg"
+      maxHeight="none"
       items={buildTree(all, read(dirs), read(currentWorkspaceId))}
       expanded={expandedKeys(all, read(expanded), read(collapsedGroups))}
       selected={sel ? nodeKey(sel.rootId, sel.path) : undefined}
@@ -335,17 +335,20 @@ function WorkspacesView() {
 export default function Panel() {
   const loc = read(location)
   return (
-    <Stack gap="sm">
+    // 위쪽 도구는 고정하고, 트리 영역이 남은 높이를 모두 차지하며 그 안에서만 스크롤한다.
+    <Box direction="column" gap="sm" height="100%">
       <LocationBar />
       <Actions />
       <SearchBar />
       <Message />
       <ModeForm />
-      {read(query).trim() ? <SearchResults /> : loc ? <LocationView path={loc} /> : <WorkspacesView />}
+      <Box grow minHeight={0} scroll="y">
+        {read(query).trim() ? <SearchResults /> : loc ? <LocationView path={loc} /> : <WorkspacesView />}
+      </Box>
       <Row justify="between" align="center">
         <Text muted size="xs">클릭: 탭으로 열기 · 더블클릭: 폴더로 이동</Text>
         <Switch label="무시된 파일 표시" checked={read(showIgnored)} onChange={setShowIgnored} />
       </Row>
-    </Stack>
+    </Box>
   )
 }
